@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""RSS Aggregator - fetch last N days of updates from OPML feed list"""
+"""RSS Aggregator - fetch last N days of updates from OPML feed list (sequential)"""
 import feedparser
 import html
+import socket
 from datetime import datetime, timedelta
 import sys
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
-import signal
+import xml.etree.ElementTree as ET
+
+# Bound every network call so a slow feed can't stall the run
+socket.setdefaulttimeout(15)
 
 # Parse args
 days = 1
@@ -15,7 +18,6 @@ if len(sys.argv) > 1 and sys.argv[1] == '--days':
     days = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 
 opml_path = '/Users/wanglingwei/.openclaw/skills/rss-aggregator/references/feeds.opml'
-import xml.etree.ElementTree as ET
 tree = ET.parse(opml_path)
 feeds = []
 for outline in tree.iter('outline'):
@@ -26,8 +28,8 @@ for outline in tree.iter('outline'):
 
 cutoff = datetime.now() - timedelta(days=days)
 
-def fetch_feed(feed):
-    articles = []
+all_articles = []
+for feed in feeds:
     try:
         parsed = feedparser.parse(feed['url'])
         for entry in parsed.entries:
@@ -46,29 +48,18 @@ def fetch_feed(feed):
                     summary = re.sub(r'<[^>]+>', '', summary)
                     summary = html.unescape(summary).strip()
                     link = entry.get('link', '')
-                    articles.append({
+                    all_articles.append({
                         'title': html.unescape(entry.get('title', '')),
                         'author': entry.get('author', feed['title']),
                         'summary': summary[:800],
                         'updated': updated.strftime('%Y-%m-%d %H:%M'),
                         'link': link,
-                        'source': feed['title']
+                        'source': feed['title'],
                     })
             except Exception:
                 continue
     except Exception:
-        pass
-    return articles
-
-all_articles = []
-with ThreadPoolExecutor(max_workers=8) as executor:
-    futures = {executor.submit(fetch_feed, f): f for f in feeds}
-    for future in futures.values():
-        try:
-            result = future.result(timeout=6)
-            all_articles.extend(result)
-        except Exception:
-            pass
+        continue
 
 all_articles.sort(key=lambda x: x['updated'], reverse=True)
 
